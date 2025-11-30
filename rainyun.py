@@ -420,74 +420,50 @@ def compute_similarity(img1_path, img2_path):
         return 0.0, 0
 
 
-# 修改main函数，移除重复的变量定义
-# 修改随机延时等待设置
-if __name__ == "__main__":
+def sign_in_account(user, pwd, debug=False, headless=False):
+    """
+    单个账户登录签到函数
+    
+    Args:
+        user: 用户名
+        pwd: 密码
+        debug: 是否开启调试模式
+        headless: 是否使用无头模式
+        
+    Returns:
+        bool: 签到是否成功
+    """
     # 连接超时等待
     timeout = 15
-
-    user = os.environ.get("RAINYUN_USER")
-    pwd = os.environ.get("RAINYUN_PASS")
+    driver = None
     
-    # 确保有用户名和密码
-    if not user or not pwd:
-        err_msg = "错误: 未设置用户名或密码，请在环境变量中设置RAINYUN_USER和RAINYUN_PASS"
-        print(err_msg)
-        # --- START OF MODIFICATION: 添加配置错误通知 ---
-        try:
-            send("雨云签到配置错误", err_msg)
-        except Exception as e:
-            print(f"发送通知失败: {e}")
-        # --- END OF MODIFICATION ---
-        exit(1)
-    
-    # 环境变量判断是否在GitHub Actions中运行
-    is_github_actions = os.environ.get("GITHUB_ACTIONS", "false") == "true"
-    # 从环境变量读取模式设置
-    debug = os.environ.get('DEBUG', 'false').lower() == 'true'
-    headless = os.environ.get('HEADLESS', 'false').lower() == 'true'
-    
-    # 如果在GitHub Actions环境中，强制使用无头模式
-    if is_github_actions:
-        headless = True
-    
-    # 以下代码保持不变...
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    logger = logging.getLogger(__name__)
-    ver = "2.2"
-    logger.info("------------------------------------------------------------------")
-    logger.info(f"雨云自动签到工作流 v{ver} by 筱序二十 ~")
-    logger.info("推广链接https://www.rainyun.com/bv_?s=rqd")
-    logger.info("支持我https://rewards.qxzhan.cn/")
-    logger.info("Github发布页: https://github.com/scfcn/Rainyun-Qiandao")
-    logger.info("------------------------------------------------------------------")
-    
-    driver = None # 【新增】初始化 driver 变量
-    
-    try: # 【新增】开始 try 块，包裹主逻辑
+    try:
+        logger.info(f"开始处理账户: {user}")
+        
         if not debug:
             delay_sec = random.randint(5, 10)
             logger.info(f"随机延时等待 {delay_sec} 秒")
             time.sleep(delay_sec)
+        
         logger.info("初始化 ddddocr")
         ocr = ddddocr.DdddOcr(ocr=True, show_ad=False)
         det = ddddocr.DdddOcr(det=True, show_ad=False)
-        logger.info("初始化 Selenium")
-        # 在 main 函数中添加
-        headless = os.environ.get('HEADLESS', 'false').lower() == 'true'
-        debug = os.environ.get('DEBUG', 'false').lower() == 'true'
         
+        logger.info("初始化 Selenium")
         # 传递 headless 参数给 init_selenium
         driver = init_selenium(debug=debug, headless=headless)
+        
         # 过 Selenium 检测
         with open("stealth.min.js", mode="r") as f:
             js = f.read()
         driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
             "source": js
         })
+        
         logger.info("发起登录请求")
         driver.get("https://app.rainyun.com/auth/login")
         wait = WebDriverWait(driver, timeout)
+        
         # 改进的登录逻辑，添加重试机制
         max_retries = 3
         retry_count = 0
@@ -533,6 +509,7 @@ if __name__ == "__main__":
                     logger.error("页面加载超时，请尝试延长超时时间或切换到国内网络环境！")
                     # 这里退出前不发送通知，留给下面的 else 块处理
                     raise Exception("登录页面加载超时或失败。") # 抛出异常到外层 try/except
+        
         try:
             login_captcha = wait.until(EC.visibility_of_element_located((By.ID, 'tcaptcha_iframe_dy')))
             logger.warning("触发验证码！")
@@ -540,8 +517,10 @@ if __name__ == "__main__":
             process_captcha()
         except TimeoutException:
             logger.info("未触发验证码")
+        
         time.sleep(5)
         driver.switch_to.default_content()
+        
         # 验证登录状态并处理赚取积分
         if "dashboard" in driver.current_url:
             logger.info("登录成功！")
@@ -604,6 +583,7 @@ if __name__ == "__main__":
                     time.sleep(3)
             else:
                 logger.error("多次尝试后仍无法找到赚取积分按钮")
+            
             driver.implicitly_wait(5)
             points_raw = driver.find_element(By.XPATH,
                                              '//*[@id="app"]/div[1]/div[3]/div[2]/div/div/div[2]/div[1]/div[1]/div/p/div/h3').get_attribute(
@@ -620,7 +600,8 @@ if __name__ == "__main__":
             except Exception as e:
                 logger.error(f"发送通知失败: {e}")
             # --- END OF MODIFICATION ---
-
+            
+            return True
         else:
             logger.error("登录失败！")
             
@@ -632,16 +613,20 @@ if __name__ == "__main__":
             except Exception as e:
                 logger.error(f"发送通知失败: {e}")
             # --- END OF MODIFICATION ---
+            
+            return False
 
     except Exception as e: # 【新增】捕获未处理的异常
         err_msg = f"脚本运行期间发生致命异常: {str(e)}"
         logger.error(err_msg, exc_info=True)
         # --- START OF MODIFICATION: 添加致命错误通知 ---
         try:
-            send("雨云脚本运行异常", err_msg)
+            send("雨云脚本运行异常", f"用户: {user}\n{err_msg}")
         except Exception as e_send:
             logger.error(f"发送通知失败: {e_send}")
         # --- END OF MODIFICATION ---
+        
+        return False
 
     finally: # 【新增】确保浏览器关闭
         if driver:
@@ -650,3 +635,72 @@ if __name__ == "__main__":
                 driver.quit()
             except:
                 pass
+
+# 修改main函数，移除重复的变量定义
+# 修改随机延时等待设置
+if __name__ == "__main__":
+    # 环境变量判断是否在GitHub Actions中运行
+    is_github_actions = os.environ.get("GITHUB_ACTIONS", "false") == "true"
+    # 从环境变量读取模式设置
+    debug = os.environ.get('DEBUG', 'false').lower() == 'true'
+    headless = os.environ.get('HEADLESS', 'false').lower() == 'true'
+    
+    # 如果在GitHub Actions环境中，强制使用无头模式
+    if is_github_actions:
+        headless = True
+    
+    # 以下代码保持不变...
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
+    ver = "2.2"
+    logger.info("------------------------------------------------------------------")
+    logger.info(f"雨云自动签到工作流 v{ver} by 筱序二十 ~")
+    logger.info("推广链接https://www.rainyun.com/bv_?s=rqd")
+    logger.info("支持我https://rewards.qxzhan.cn/")
+    logger.info("Github发布页: https://github.com/scfcn/Rainyun-Qiandao")
+    logger.info("------------------------------------------------------------------")
+    
+    # 读取账户信息
+    accounts = []
+    
+    # 读取环境变量
+    users_env = os.environ.get("RAINYUN_USER", "")
+    passwords_env = os.environ.get("RAINYUN_PASS", "")
+    
+    # 按行分割，过滤空行
+    users = [user.strip() for user in users_env.split('\n') if user.strip()]
+    passwords = [pwd.strip() for pwd in passwords_env.split('\n') if pwd.strip()]
+    
+    # 检查用户和密码数量是否匹配
+    if len(users) == len(passwords):
+        if len(users) > 0:
+            logger.info(f"读取到 {len(users)} 个账户配置")
+            for user, pwd in zip(users, passwords):
+                accounts.append((user, pwd))
+        else:
+            logger.warning("未读取到有效账户配置")
+    else:
+        logger.error(f"用户和密码数量不匹配: {len(users)} 个用户, {len(passwords)} 个密码")
+        exit(1)
+    
+    # 确保有账户配置
+    if not accounts:
+        err_msg = "错误: 未设置用户名或密码，请在环境变量中设置RAINYUN_USER和RAINYUN_PASS（支持多行格式，每行一个用户名/密码，数量需匹配）"
+        print(err_msg)
+        # --- START OF MODIFICATION: 添加配置错误通知 ---
+        try:
+            send("雨云签到配置错误", err_msg)
+        except Exception as e:
+            print(f"发送通知失败: {e}")
+        # --- END OF MODIFICATION ---
+        exit(1)
+    
+    logger.info(f"共读取到 {len(accounts)} 个账户")
+    
+    # 遍历所有账户，依次执行签到
+    for i, (user, pwd) in enumerate(accounts, 1):
+        logger.info(f"\n=== 开始处理第 {i} 个账户: {user} ===")
+        sign_in_account(user, pwd, debug=debug, headless=headless)
+        logger.info(f"=== 第 {i} 个账户处理完成 ===\n")
+    
+    logger.info("所有账户处理完成")
