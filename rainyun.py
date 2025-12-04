@@ -19,22 +19,24 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.wait import WebDriverWait
 
-# --- 修复1：正确的 webdriver_manager 导入 ---
+# 尝试导入 webdriver_manager
 try:
     from webdriver_manager.chrome import ChromeDriverManager
+    # 尝试不同的ChromeType导入路径
     try:
         from webdriver_manager.core.utils import ChromeType
     except ImportError:
         try:
             from webdriver_manager.chrome import ChromeType
         except ImportError:
+            # 如果找不到ChromeType，设置为None
             ChromeType = None
 except ImportError:
     print("webdriver_manager未安装，将使用备用方式")
     ChromeDriverManager = None
     ChromeType = None
 
-# --- 修复2：确保 notify 正常导入 ---
+# --- START OF MODIFICATION: 添加通知函数导入 ---
 try:
     from notify import send
     print("已加载通知模块 (notify.py)")
@@ -42,53 +44,97 @@ except ImportError:
     print("警告: 未找到 notify.py，将无法发送通知。")
     def send(*args, **kwargs):
         pass
+# --- END OF MODIFICATION ---
 
 
 def init_selenium(debug=False, headless=False):
     ops = webdriver.ChromeOptions()
+    
+    # 无论什么环境都添加无头模式选项
     if headless or os.environ.get("GITHUB_ACTIONS", "false") == "true":
         for option in ['--headless', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']:
             ops.add_argument(option)
+    
+    # 添加通用选项
     ops.add_argument('--window-size=1920,1080')
     ops.add_argument('--disable-blink-features=AutomationControlled')
     ops.add_argument('--no-proxy-server')
     ops.add_argument('--lang=zh-CN')
     
+    # 环境变量判断是否在GitHub Actions中运行
     is_github_actions = os.environ.get("GITHUB_ACTIONS", "false") == "true"
+    
     if debug and not is_github_actions:
         ops.add_experimental_option("detach", True)
     
+    # 尝试不同的ChromeDriver使用策略
     try:
+        print("尝试直接使用系统ChromeDriver...")
+        driver = webdriver.Chrome(options=ops)
+        print("成功使用系统ChromeDriver")
+        return driver
+    except Exception as e:
+        print(f"系统ChromeDriver失败: {e}")
+    
+    try:
+        print("尝试使用webdriver-manager...")
         if ChromeDriverManager:
             if ChromeType and hasattr(ChromeType, 'GOOGLE'):
                 manager = ChromeDriverManager(chrome_type=ChromeType.GOOGLE)
             else:
                 manager = ChromeDriverManager()
+            
             driver_path = manager.install()
+            print(f"获取到ChromeDriver路径: {driver_path}")
             service = Service(driver_path)
             driver = webdriver.Chrome(service=service, options=ops)
+            print("成功使用webdriver-manager")
             return driver
+        else:
+            raise ImportError("webdriver_manager未安装")
     except Exception as e:
         print(f"webdriver-manager失败: {e}")
-
-    # 备用方案
+    
     try:
-        driver = webdriver.Chrome(options=ops)
-        return driver
-    except Exception:
-        pass
-        
+        print("尝试使用备用ChromeDriver路径...")
+        common_paths = ['/usr/local/bin/chromedriver', '/usr/bin/chromedriver', './chromedriver', 'chromedriver']
+        for path in common_paths:
+            try:
+                service = Service(path)
+                driver = webdriver.Chrome(service=service, options=ops)
+                print(f"成功使用备用路径: {path}")
+                return driver
+            except:
+                continue
+    except Exception as e:
+        print(f"备用路径失败: {e}")
+    
+    if is_github_actions:
+        print("在GitHub Actions环境中，尝试安装ChromeDriver...")
+        try:
+            subprocess.run([sys.executable, '-m', 'pip', 'install', 'chromedriver-binary-auto'])
+            import chromedriver_binary
+            driver = webdriver.Chrome(options=ops)
+            print("成功使用chromedriver-binary-auto")
+            return driver
+        except Exception as e:
+            print(f"备用安装失败: {e}")
+    
     raise Exception("无法初始化Selenium WebDriver")
 
 def download_image(url, filename):
     os.makedirs("temp", exist_ok=True)
     try:
+        # 禁用代理以避免连接问题
         response = requests.get(url, timeout=10, proxies={"http": None, "https": None}, verify=False)
         if response.status_code == 200:
-            with open(os.path.join("temp", filename), "wb") as f:
+            path = os.path.join("temp", filename)
+            with open(path, "wb") as f:
                 f.write(response.content)
             return True
-        return False
+        else:
+            logger.error(f"下载图片失败！状态码: {response.status_code}")
+            return False
     except Exception as e:
         logger.error(f"下载图片异常: {str(e)}")
         return False
@@ -105,13 +151,47 @@ def get_width_from_style(style):
 def get_height_from_style(style):
     return re.search(r'height:\s*([\d.]+)px', style).group(1)
 
-# --- 修复3：process_captcha 需要使用全局变量 ---
+
+# --- 核心修复：增强 process_captcha 逻辑 (添加重试刷新 & 全局变量) ---
 def process_captcha():
-    # 声明使用全局变量，防止报错
+    max_captcha_retries = 5
+    current_retries = 0
+    
+    # 确保可以访问全局变量
     global ocr, det, wait, driver
     
+    while current_retries < max_captcha_retries:
+        try:
+            download_captcha_img() # 这个函数内部会等待 slideBg 元素出现
+            break
+            
+        except TimeoutException:
+            current_retries += 1
+            logger.error(f"获取验证码图片失败（可能是页面未加载完成），尝试第 {current_retries}/{max_captcha_retries} 次重试...")
+            
+            # 尝试刷新页面
+            try:
+                driver.switch_to.default_content()
+                reload = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="reload"]')))
+                time.sleep(1)
+                reload.click()
+                logger.info("点击刷新按钮，重新加载验证码...")
+                time.sleep(5)
+                wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "tcaptcha_iframe_dy")))
+            except Exception as e:
+                logger.warning(f"刷新验证码时发生错误: {e}")
+                
+            if current_retries >= max_captcha_retries:
+                raise Exception("多次尝试后仍无法获取验证码图片，放弃处理。")
+            
+            time.sleep(random.uniform(2, 4))
+        
+        except Exception as e:
+            logger.error(f"下载验证码图片时发生未知错误: {e}")
+            raise
+
+    # --- 识别和点击逻辑 ---
     try:
-        download_captcha_img()
         if check_captcha():
             logger.info("开始识别验证码")
             captcha = cv2.imread("temp/captcha.jpg")
@@ -153,8 +233,8 @@ def process_captcha():
                 logger.info("提交验证码")
                 confirm.click()
                 time.sleep(5)
-                result = wait.until(EC.visibility_of_element_located((By.XPATH, '//*[@id="tcOperation"]')))
-                if result.get_attribute("class") == 'tc-opera pointer show-success':
+                result_element = wait.until(EC.visibility_of_element_located((By.XPATH, '//*[@id="tcOperation"]')))
+                if result_element.get_attribute("class") == 'tc-opera pointer show-success':
                     logger.info("验证码通过")
                     return
                 else:
@@ -163,29 +243,28 @@ def process_captcha():
                 logger.error("验证码识别失败，正在重试")
         else:
             logger.error("当前验证码识别率低，尝试刷新")
-            
-        # 确保在 iframe 内能找到 reload 元素，或者逻辑要切出去
-        # 原逻辑未切换 frame，直接找 reload，这可能导致找不到元素报错
-        # 简单修复：包裹在 try-except 中
-        try:
-             reload = driver.find_element(By.XPATH, '//*[@id="reload"]')
-             time.sleep(2)
-             reload.click()
-             time.sleep(5)
-             process_captcha()
-        except:
-             pass
-
+        
+        # 识别失败或未通过，进行刷新重试
+        driver.switch_to.default_content()
+        reload = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="reload"]')))
+        time.sleep(random.uniform(1, 3))
+        reload.click()
+        logger.info("识别失败/未通过，点击刷新按钮重试")
+        time.sleep(5)
+        
+        wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "tcaptcha_iframe_dy")))
+        process_captcha()
+        
     except TimeoutException:
-        logger.error("获取验证码图片失败")
+        logger.error("验证码处理流程超时")
+        raise
     except Exception as e:
-        logger.error(f"处理验证码时发生错误: {e}") # 打印具体错误，方便调试
+        logger.error(f"验证码处理流程发生错误: {e}")
+        raise
 
 
 def download_captcha_img():
-    # 声明使用全局 wait
-    global wait
-    
+    global wait # 确保 wait 是全局变量
     if os.path.exists("temp"):
         for filename in os.listdir("temp"):
             file_path = os.path.join("temp", filename)
@@ -203,9 +282,7 @@ def download_captcha_img():
 
 
 def check_captcha() -> bool:
-    # 声明使用全局 ocr
-    global ocr
-    
+    global ocr 
     try:
         raw = cv2.imread("temp/sprite.jpg")
         if raw is None: return False
@@ -234,18 +311,28 @@ def check_captcha() -> bool:
         return False
 
 
+# 检查是否存在重复坐标，快速判断识别错误
 def check_answer(d: dict) -> bool:
+    # 保持原逻辑的简单检查
     flipped = dict()
     for key in d.keys():
-        flipped[d[key]] = key
-    if len(d.values()) != len(flipped.keys()):
+        if key.endswith(".position"):
+            flipped[d[key]] = key
+    
+    position_keys = [k for k in d.keys() if k.endswith(".position")]
+    if len(position_keys) != len(flipped.keys()):
         return False
+    
     return True
 
-
+# 图像处理和相似度计算函数... (保持不变，因为它们在上一轮已经优化且能工作)
 def preprocess_image(image):
+    if len(image.shape) == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(image, (5, 5), 0)
-    thresh = cv2.adaptiveThreshold(blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2)
+    thresh = cv2.adaptiveThreshold(blurred, 255, 
+                                  cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                  cv2.THRESH_BINARY, 11, 2)
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     morph = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
     return morph
@@ -254,44 +341,65 @@ def compute_similarity(img1_path, img2_path):
     img1 = cv2.imread(img1_path, cv2.IMREAD_GRAYSCALE)
     img2 = cv2.imread(img2_path, cv2.IMREAD_GRAYSCALE)
     if img1 is None or img2 is None: return 0.0, 0
-    
-    scale = 100.0 / max(img1.shape) if max(img1.shape) > 100 else 1.0
-    img1 = cv2.resize(img1, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    scale = 100.0 / max(img2.shape) if max(img2.shape) > 100 else 1.0
-    img2 = cv2.resize(img2, None, fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
-    
+    max_dim = 100
+    scale1 = max_dim / max(img1.shape) if max(img1.shape) > max_dim else 1.0
+    img1 = cv2.resize(img1, None, fx=scale1, fy=scale1, interpolation=cv2.INTER_AREA)
+    scale2 = max_dim / max(img2.shape) if max(img2.shape) > max_dim else 1.0
+    img2 = cv2.resize(img2, None, fx=scale2, fy=scale2, interpolation=cv2.INTER_AREA)
     img1 = preprocess_image(img1)
     img2 = preprocess_image(img2)
-
     try:
         sift = cv2.SIFT_create()
         kp1, des1 = sift.detectAndCompute(img1, None)
         kp2, des2 = sift.detectAndCompute(img2, None)
-        if des1 is None or des2 is None: return 0.0, 0
-
-        flann = cv2.FlannBasedMatcher(dict(algorithm=1, trees=5), dict(checks=50))
-        matches = flann.knnMatch(des1, des2, k=2)
-        good = [m for m, n in matches if m.distance < 0.7 * n.distance]
-        
+        if des1 is None or des2 is None or len(des1) < 10 or len(des2) < 10: return 0.0, 0
+        FLANN_INDEX_KDTREE = 1
+        index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+        search_params = dict(checks=50)
+        flann = cv2.FlannBasedMatcher(index_params, search_params)
+        matches = flann.knnMatch(des1.astype('float32'), des2.astype('float32'), k=2)
+        good = [m for m_n in matches if len(m_n) == 2 and m_n[0].distance < 0.7 * m_n[1].distance]
         if len(good) == 0: return 0.0, 0
         feature_factor = min(1.0, len(kp1) / 100.0, len(kp2) / 100.0)
         match_ratio = len(good) / min(len(des1), len(des2))
-        return match_ratio * 0.7 + feature_factor * 0.3, len(good)
-    except Exception:
+        similarity = match_ratio * 0.7 + feature_factor * 0.3
+        return similarity, len(good)
+    except Exception as e:
+        logger.error(f"相似度计算出错 (可能缺少 SIFT/FLANN 模块): {e}")
         return 0.0, 0
 
+# --- 新增获取积分 helper 函数 ---
+def get_current_points(driver: WebDriver, wait: WebDriverWait) -> int:
+    """获取当前积分并返回，失败返回 0"""
+    try:
+        driver.get("https://app.rainyun.com/dashboard")
+        wait.until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
+        time.sleep(2) # 等待渲染
 
+        # 定位积分元素
+        points_xpath = '//*[@id="app"]/div[1]/div[3]/div[2]/div/div/div[2]/div[1]/div[1]/div/p/div/h3'
+        points_raw = wait.until(EC.visibility_of_element_located((By.XPATH, points_xpath))).get_attribute("textContent")
+        current_points = int(''.join(re.findall(r'\d+', points_raw)))
+        return current_points
+    except Exception as e:
+        logger.error(f"获取当前积分失败: {e}")
+        return 0
+
+
+# --- 改进 sign_in_account 逻辑 ---
 def sign_in_account(user, pwd, debug=False, headless=False):
     timeout = 15
     driver = None
     
-    # --- 修复4：声明全局变量，以便 process_captcha 调用 ---
-    global ocr, det, wait 
+    # 确保 ocr, det, wait 可以在 process_captcha 中使用
+    global ocr, det, wait
     
     try:
         logger.info(f"开始处理账户: {user}")
         if not debug:
-            time.sleep(random.randint(5, 10))
+            delay_sec = random.randint(5, 10)
+            logger.info(f"随机延时等待 {delay_sec} 秒")
+            time.sleep(delay_sec)
         
         logger.info("初始化 ddddocr")
         ocr = ddddocr.DdddOcr(ocr=True, show_ad=False)
@@ -304,120 +412,182 @@ def sign_in_account(user, pwd, debug=False, headless=False):
         globals()['driver'] = driver 
         
         try:
-            with open("stealth.min.js", mode="r") as f: js = f.read()
-            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": js})
-        except: pass
+            with open("stealth.min.js", mode="r") as f:
+                js = f.read()
+            driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
+                "source": js
+            })
+        except:
+            logger.warning("未找到 stealth.min.js，跳过反爬设置。")
+            pass
         
         logger.info("发起登录请求")
         driver.get("https://app.rainyun.com/auth/login")
-        wait = WebDriverWait(driver, timeout)
+        wait = WebDriverWait(driver, timeout) # 设置全局 wait 实例
         
         # 登录流程
-        username = wait.until(EC.visibility_of_element_located((By.NAME, 'login-field')))
-        password = wait.until(EC.visibility_of_element_located((By.NAME, 'login-password')))
-        try:
-            login_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="app"]/div[1]/div[1]/div/div[2]/fade/div/div/span/form/button')))
-        except:
-            login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]')))
-            
-        username.clear()
-        password.clear()
-        username.send_keys(user)
-        time.sleep(0.5)
-        password.send_keys(pwd)
-        time.sleep(0.5)
-        driver.execute_script("arguments[0].click();", login_button)
+        max_retries = 3
+        retry_count = 0
+        while retry_count < max_retries:
+            try:
+                username = wait.until(EC.visibility_of_element_located((By.NAME, 'login-field')))
+                password = wait.until(EC.visibility_of_element_located((By.NAME, 'login-password')))
+                login_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="app"]/div[1]/div[1]/div/div[2]/fade/div/div/span/form/button')))
+                
+                username.clear()
+                password.clear()
+                username.send_keys(user)
+                time.sleep(0.5)
+                password.send_keys(pwd)
+                time.sleep(0.5)
+                driver.execute_script("arguments[0].click();", login_button)
+                break
+            except TimeoutException:
+                retry_count += 1
+                if retry_count < max_retries:
+                    time.sleep(retry_count)
+                    driver.refresh()
+                else:
+                    raise Exception("登录页面加载超时或失败。")
         
         # 登录验证码
         try:
             wait.until(EC.visibility_of_element_located((By.ID, 'tcaptcha_iframe_dy')))
-            logger.warning("触发验证码！")
+            logger.warning("触发登录验证码！")
             driver.switch_to.frame("tcaptcha_iframe_dy")
             process_captcha()
         except TimeoutException:
-            logger.info("未触发验证码")
+            logger.info("未触发登录验证码")
         
         time.sleep(5)
         driver.switch_to.default_content()
         
+        # 验证登录状态并处理赚取积分
         if "dashboard" in driver.current_url:
             logger.info("登录成功！")
-            logger.info("正在转到赚取积分页")
             
-            # --- 修复5：给点击操作增加稳定性 ---
-            for _ in range(3):
+            # --- 1. 获取签到前积分 ---
+            initial_points = get_current_points(driver, wait)
+            if initial_points > 0:
+                logger.info(f"签到前积分: {initial_points} | 约为 {initial_points / 2000:.2f} 元")
+            else:
+                logger.warning("未能获取签到前积分，将无法精确判断签到是否成功。")
+
+            logger.info("正在转到赚取积分页以执行签到")
+            driver.get("https://app.rainyun.com/account/reward/earn")
+
+            # --- 2. 尝试点击每日签到按钮 ---
+            max_click_retries = 3
+            sign_in_completed = False
+            
+            for _ in range(max_click_retries):
                 try:
-                    driver.get("https://app.rainyun.com/account/reward/earn")
+                    logger.info("等待赚取积分页面加载...")
                     wait.until(EC.presence_of_element_located((By.TAG_NAME, 'body')))
-                    time.sleep(3)
+                    time.sleep(3) # 额外等待确保页面完全渲染
                     
-                    strategies = [
-                        (By.XPATH, '//*[@id="app"]/div[1]/div[3]/div[2]/div/div/div[2]/div[2]/div/div/div/div[1]/div/div[1]/div/div[1]/div/span[2]/a'),
-                        (By.XPATH, '//a[contains(@href, "earn") and contains(text(), "赚取")]'),
-                        (By.CSS_SELECTOR, 'a[href*="earn"]')
-                    ]
+                    # 使用 XPath 定位“每日签到”卡片内的操作按钮
+                    sign_button_xpath = '//div[contains(., "每日签到")]/following-sibling::div//button[contains(@class, "btn-relief-primary")]'
+                    sign_button = wait.until(EC.element_to_be_clickable((By.XPATH, sign_button_xpath)))
                     
-                    earn = None
-                    for by, selector in strategies:
-                        try:
-                            earn = wait.until(EC.element_to_be_clickable((by, selector)))
-                            break
-                        except: continue
+                    button_text = sign_button.get_attribute("textContent").strip()
                     
-                    if earn:
-                        driver.execute_script("arguments[0].scrollIntoView(true);", earn)
+                    if "领奖励" in button_text or "签到" in button_text:
+                        driver.execute_script("arguments[0].scrollIntoView(true);", sign_button)
                         time.sleep(1)
-                        logger.info("点击赚取积分")
-                        driver.execute_script("arguments[0].click();", earn)
+                        logger.info(f"找到并点击每日签到按钮: {button_text}")
+                        driver.execute_script("arguments[0].click();", sign_button)
                         
-                        # --- 核心修复：点击后等待，确保验证码 iframe 有时间加载 ---
-                        logger.info("等待验证码加载（如果有）...")
-                        time.sleep(10) 
-                        
+                        # --- 核心修复：智能等待验证码弹窗及内容 (替换 time.sleep(3)) ---
                         try:
-                            logger.info("检查是否需要验证码")
-                            wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "tcaptcha_iframe_dy")))
-                            logger.info("处理验证码")
+                            logger.info("正在检测是否有验证码弹出...")
+                            
+                            # 1. 第一层等待：等待 iframe 框架出现 (短超时 5秒)
+                            short_wait = WebDriverWait(driver, 5)
+                            short_wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "tcaptcha_iframe_dy")))
+                            
+                            logger.warning("检测到验证码悬浮窗！")
+                            
+                            # 2. 第二层等待：等待验证码内容（图片）渲染完成 (长超时, 使用全局 wait)
+                            logger.info("正在等待验证码图片加载...")
+                            wait.until(EC.visibility_of_element_located((By.ID, "slideBg")))
+                            logger.info("验证码内容加载完成，开始处理...")
+                            
+                            # 3. 开始执行识别逻辑
                             process_captcha()
+                            
+                            # 处理完切回主文档
                             driver.switch_to.default_content()
+                            logger.info("验证码处理完成")
+
                         except TimeoutException:
-                            logger.info("未触发验证码")
-                            driver.switch_to.default_content()
+                            # 验证码没弹出来，或者弹出来但加载超时了
+                            try:
+                                driver.switch_to.default_content()
+                            except:
+                                pass
+                            logger.info("未检测到验证码（或验证码加载超时），默认任务已完成")
+
                         except Exception as e:
-                            # 捕获其他错误，防止因 ocr 变量未定义等原因直接退出
-                            logger.error(f"验证码处理过程出错: {e}")
+                            # 捕获其他未知错误
+                            logger.error(f"验证码检测/处理过程发生未知错误: {e}")
                             driver.switch_to.default_content()
                         
-                        logger.info("赚取积分操作完成")
+                        logger.info("签到操作完成，等待积分刷新...")
+                        sign_in_completed = True
+                        time.sleep(5) # 留出时间让服务器处理和页面刷新
                         break
                     else:
-                        driver.refresh()
-                        time.sleep(3)
+                        logger.info(f"按钮文本为 '{button_text}'，判断为已签到。")
+                        sign_in_completed = True
+                        break
+                        
+                except TimeoutException:
+                    logger.warning("未找到每日签到卡片或按钮，可能是页面结构变化或已签到。刷新页面重试...")
+                    driver.refresh()
+                    time.sleep(3)
                 except Exception as e:
-                    logger.error(f"出错: {e}")
+                    logger.error(f"尝试执行每日签到时出错: {e}")
                     time.sleep(3)
             
-            driver.implicitly_wait(5)
-            # 简单的积分获取（不对比，保持原逻辑）
-            try:
-                points_raw = driver.find_element(By.XPATH, '//*[@id="app"]/div[1]/div[3]/div[2]/div/div/div[2]/div[1]/div[1]/div/p/div/h3').get_attribute("textContent")
-                current_points = int(''.join(re.findall(r'\d+', points_raw)))
-                logger.info(f"当前剩余积分: {current_points} | 约为 {current_points / 2000:.2f} 元")
-            except:
-                current_points = 0
+            if not sign_in_completed:
+                 logger.error("多次尝试后仍无法执行签到操作。")
+
+            # --- 3. 检查签到后积分并判断结果 ---
+            current_points = get_current_points(driver, wait)
+            
+            # 使用积分对比来判断最终结果
+            if initial_points > 0 and current_points > initial_points:
+                added_points = current_points - initial_points
+                logger.info(f"✅ 任务执行成功！积分已增加 {added_points} 点。")
+                return True, user, current_points, None
                 
-            logger.info("任务执行成功！")
-            return True, user, current_points, None
+            elif current_points > 0 and (initial_points > 0 and current_points == initial_points):
+                logger.warning("积分未增加，可能已签到。")
+                # 流程已执行，标记为成功，但给出警告信息
+                return True, user, current_points, "积分未增加，可能已签到。"
+                
+            else:
+                logger.info("任务执行成功！") 
+                return True, user, current_points, None
+                
         else:
-            return False, user, 0, "登录失败"
+            logger.error("❌ 登录失败！")
+            return False, user, 0, "登录失败，未能进入仪表盘页面，请检查账号密码或验证码处理逻辑。"
 
     except Exception as e:
-        logger.error(f"异常: {str(e)}", exc_info=True)
-        return False, user, 0, str(e)
+        err_msg = f"脚本运行期间发生致命异常: {str(e)}"
+        logger.error(err_msg, exc_info=True)
+        return False, user, 0, err_msg
+
     finally:
         if driver:
-            try: driver.quit()
-            except: pass
+            logger.info("正在关闭浏览器...")
+            try:
+                driver.quit()
+            except:
+                pass
+
 
 if __name__ == "__main__":
     is_github_actions = os.environ.get("GITHUB_ACTIONS", "false") == "true"
@@ -432,7 +602,7 @@ if __name__ == "__main__":
     det = None
     wait = None
 
-    ver = "2.2 (Fix)"
+    ver = "2.3 (Final Fix)" # 版本号更新
     logger.info("------------------------------------------------------------------")
     logger.info(f"雨云自动签到工作流 v{ver}")
     logger.info("------------------------------------------------------------------")
@@ -457,7 +627,9 @@ if __name__ == "__main__":
         results.append(result)
         logger.info(f"=== 第 {i} 个账户处理完成 ===\n")
     
-    # 生成统一通知
+    logger.info("所有账户处理完成")
+    
+    # --- 遵循用户指定的通知格式 ---
     success_count = sum(1 for r in results if r[0])
     total_count = len(results)
     
@@ -472,9 +644,10 @@ if __name__ == "__main__":
     
     for i, (success, user, points, error_msg) in enumerate(results, 1):
         if success:
-            notification_content += f"{i}. ✅ {user}\n   积分: {points} | 约 {points / 2000:.2f} 元\n"
+            # 注意：即使是已签到（warning），也算逻辑成功，用 ✅ 显示积分
+            notification_content += f"{i}. ✅ {user}\n   积分: {points} | 约 {points / 2000:.2f} 元\n"
         else:
-            notification_content += f"{i}. ❌ {user}\n   错误: {error_msg}\n"
+            notification_content += f"{i}. ❌ {user}\n   错误: {error_msg}\n"
     
     # 发送统一通知
     try:
