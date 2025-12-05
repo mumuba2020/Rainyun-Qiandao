@@ -2,7 +2,7 @@ name: Rainyun 自动签到
 
 on:
   schedule:
-    - cron: '0 4 * * *'  # UTC+8 12点执行
+    - cron: '0 2 * * *'  # UTC+8 12点执行
   workflow_dispatch:  # 允许手动触发
 
 jobs:
@@ -43,7 +43,8 @@ jobs:
         run: mkdir -p temp
       
       - name: 执行签到脚本
-        run: python rainyun.py
+       # 开启debug查看完整过程
+        run: DEBUG=true HEADLESS=false python rainyun.py python rainyun.py
         env:
           # 请在GitHub仓库的Settings > Secrets and variables > Actions中设置这些密钥
           RAINYUN_USER: ${{ secrets.RAINYUN_USER }}
