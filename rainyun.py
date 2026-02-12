@@ -2,6 +2,7 @@ import logging
 import os
 import random
 import re
+import stat
 import time
 
 import cv2
@@ -190,6 +191,7 @@ def init_selenium(debug=False, headless=False) -> WebDriver:
             if os.path.isfile(driver_path):
                 filename = os.path.basename(driver_path)
                 if 'chromedriver' in filename.lower() and 'THIRD_PARTY_NOTICES' not in filename:
+                    os.chmod(driver_path, os.stat(driver_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
                     service = Service(driver_path)
                     driver = webdriver.Chrome(service=service, options=ops)
                     return driver
@@ -199,6 +201,7 @@ def init_selenium(debug=False, headless=False) -> WebDriver:
                 for file in files:
                     if file == 'chromedriver' or file == 'chromedriver.exe':
                         correct_path = os.path.join(root, file)
+                        os.chmod(correct_path, os.stat(correct_path).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
                         service = Service(correct_path)
                         driver = webdriver.Chrome(service=service, options=ops)
                         return driver
