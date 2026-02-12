@@ -353,7 +353,7 @@ def sign_in_account(user, pwd, debug=False, headless=False):
         time.sleep(5)
         driver.switch_to.default_content()
         
-        if "dashboard" in driver.current_url or "app.rainyun.com" in driver.current_url and "login" not in driver.current_url:
+        if "dashboard" in driver.current_url or ("app.rainyun.com" in driver.current_url and "login" not in driver.current_url):
             logger.info("登录成功")
             
             for _ in range(3):
