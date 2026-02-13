@@ -50,7 +50,13 @@ except ImportError:
 def init_selenium(debug=False, headless=False) -> WebDriver:
     ops = Options()
     if headless or os.environ.get("GITHUB_ACTIONS", "false") == "true":
-        for option in ['--headless', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']:
+        for option in ['--headless=new', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu',
+                       '--disable-extensions', '--disable-software-rasterizer',
+                       '--remote-debugging-port=9222', '--disable-background-timer-throttling',
+                       '--disable-backgrounding-occluded-windows', '--disable-renderer-backgrounding',
+                       '--disable-features=VizDisplayCompositor',
+                       '--disable-ipc-flooding-protection',
+                       '--disable-default-apps']:
             ops.add_argument(option)
     ops.add_argument('--window-size=1920,1080')
     ops.add_argument('--disable-blink-features=AutomationControlled')
@@ -68,9 +74,20 @@ def init_selenium(debug=False, headless=False) -> WebDriver:
             else:
                 manager = ChromeDriverManager()
             driver_path = manager.install()
-            service = Service(driver_path)
-            driver = webdriver.Chrome(service=service, options=ops)
-            return driver
+            if os.path.isfile(driver_path) and os.access(driver_path, os.X_OK):
+                service = Service(driver_path)
+                driver = webdriver.Chrome(service=service, options=ops)
+                return driver
+            else:
+                driver_dir = os.path.dirname(driver_path)
+                for root, dirs, files in os.walk(driver_dir):
+                    for file in files:
+                        if file in ['chromedriver', 'chromedriver.exe']:
+                            correct_path = os.path.join(root, file)
+                            if os.access(correct_path, os.X_OK):
+                                service = Service(correct_path)
+                                driver = webdriver.Chrome(service=service, options=ops)
+                                return driver
     except Exception as e:
         print(f"webdriver-manager失败: {e}")
 
@@ -109,11 +126,9 @@ def get_height_from_style(style):
     return re.search(r'height:\s*([\d.]+)px', style).group(1)
 
 
-def process_captcha():
-    global wait, driver
-    
+def process_captcha(driver, wait):
     try:
-        download_captcha_img()
+        download_captcha_img(driver, wait)
         logger.info("开始识别验证码")
         captcha = cv2.imread("temp/captcha.jpg")
         result = ICR.main("temp/captcha.jpg", "temp/sprite.jpg")
@@ -143,14 +158,12 @@ def process_captcha():
         time.sleep(5)
         reload.click()
         time.sleep(5)
-        process_captcha()
+        process_captcha(driver, wait)
     except TimeoutException:
         logger.error("获取验证码图片失败")
 
 
-def download_captcha_img():
-    global wait
-    
+def download_captcha_img(driver, wait):
     if os.path.exists("temp"):
         for filename in os.listdir("temp"):
             file_path = os.path.join("temp", filename)
@@ -168,7 +181,7 @@ def download_captcha_img():
 
 
 def sign_in_account(user, pwd, debug=False, headless=False):
-    timeout = 15
+    timeout = 30
     driver = None
     
     try:
@@ -186,9 +199,53 @@ def sign_in_account(user, pwd, debug=False, headless=False):
         
         logger.info("发起登录请求")
         driver.get("https://app.rainyun.com/auth/login")
+        logger.info(f"当前页面URL: {driver.current_url}")
+        logger.info(f"页面标题: {driver.title}")
+        
+        time.sleep(5)
+        
         wait = WebDriverWait(driver, timeout)
         
-        username = wait.until(EC.visibility_of_element_located((By.NAME, 'login-field')))
+        try:
+            WebDriverWait(driver, 15).until(
+                lambda d: d.execute_script("return document.readyState") == "complete"
+            )
+            logger.info("页面加载完成")
+        except:
+            logger.warning("页面加载超时，继续尝试查找元素")
+        
+        try:
+            WebDriverWait(driver, 10).until(
+                lambda d: d.execute_script("return typeof Vue !== 'undefined'") or len(d.find_elements(By.TAG_NAME, "input")) > 0
+            )
+            logger.info("JavaScript 框架已加载或找到输入元素")
+        except:
+            logger.warning("等待 JavaScript 框架超时")
+        
+        try:
+            username = wait.until(EC.visibility_of_element_located((By.NAME, 'login-field')))
+            logger.info("找到用户名输入框")
+        except TimeoutException:
+            logger.error("未找到用户名输入框，页面可能未正确加载")
+            logger.info(f"页面源码长度: {len(driver.page_source)}")
+            
+            all_inputs = driver.find_elements(By.TAG_NAME, "input")
+            logger.info(f"页面中找到 {len(all_inputs)} 个 input 元素")
+            for i, inp in enumerate(all_inputs[:5]):
+                logger.info(f"  Input {i}: name={inp.get_attribute('name')}, type={inp.get_attribute('type')}, placeholder={inp.get_attribute('placeholder')}")
+            
+            logger.info("尝试其他选择器...")
+            
+            try:
+                username = wait.until(EC.visibility_of_element_located((By.CSS_SELECTOR, 'input[type="text"]')))
+                logger.info("通过 CSS 选择器找到输入框")
+            except:
+                try:
+                    username = wait.until(EC.visibility_of_element_located((By.XPATH, '//input[contains(@placeholder, "账号") or contains(@placeholder, "用户名") or contains(@placeholder, "手机") or contains(@placeholder, "邮箱")]')))
+                    logger.info("通过 XPath 找到输入框")
+                except:
+                    raise TimeoutException("无法找到登录输入框")
+        
         password = wait.until(EC.visibility_of_element_located((By.NAME, 'login-password')))
         try:
             login_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="app"]/div[1]/div[1]/div/div[2]/fade/div/div/span/form/button')))
@@ -207,7 +264,7 @@ def sign_in_account(user, pwd, debug=False, headless=False):
             wait.until(EC.visibility_of_element_located((By.ID, 'tcaptcha_iframe_dy')))
             logger.warning("触发验证码！")
             driver.switch_to.frame("tcaptcha_iframe_dy")
-            process_captcha()
+            process_captcha(driver, wait)
         except TimeoutException:
             logger.info("未触发验证码")
         
@@ -268,7 +325,7 @@ def sign_in_account(user, pwd, debug=False, headless=False):
                             )
                             wait.until(EC.frame_to_be_available_and_switch_to_it((By.ID, "tcaptcha_iframe_dy")))
                             logger.info("处理验证码")
-                            process_captcha()
+                            process_captcha(driver, wait)
                             driver.switch_to.default_content()
                         except TimeoutException:
                             logger.info("未触发验证码，继续")
