@@ -24,14 +24,6 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-python-
       
-      - name: 缓存Cookie
-        uses: actions/cache@v3
-        with:
-          path: cache
-          key: rainyun-cookies-${{ secrets.RAINYUN_USER }}
-          restore-keys: |
-            rainyun-cookies-
-
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
@@ -48,16 +40,23 @@ jobs:
           pip install webdriver-manager chromedriver-binary-auto
       
       - name: 确保temp目录存在
-        run: mkdir -p temp
+        run: mkdir -p temp cookies
+      
+      - name: 恢复Cookie缓存
+        uses: actions/cache@v3
+        with:
+          path: cookies
+          key: rainyun-cookies-${{ secrets.RAINYUN_USER }}
+          restore-keys: |
+            rainyun-cookies-
       
       - name: 执行签到脚本
        # 开启debug查看完整过程
-        run: DEBUG=true HEADLESS=true python rainyun.py
+        run: python rainyun.py
         env:
           # 请在GitHub仓库的Settings > Secrets and variables > Actions中设置这些密钥
           RAINYUN_USER: ${{ secrets.RAINYUN_USER }}
           RAINYUN_PASS: ${{ secrets.RAINYUN_PASS }}
-          USE_COOKIE: "true"
           # 1. Push+ 微信推送（已配置，保留）
           PUSH_PLUS_TOKEN: ${{ secrets.PUSH_PLUS_TOKEN }}
           PUSH_PLUS_USER: ${{ secrets.PUSH_PLUS_USER }}  # 可选：群组编码
@@ -92,6 +91,17 @@ jobs:
           DEBUG: "false"
           # 确保使用系统路径中的ChromeDriver
           CHROMEDRIVER_PATH: "chromedriver"
+          # 最大并发线程数（默认2）
+          MAX_WORKERS: "2"
+          # 最大重试次数（默认1）
+          MAX_RETRIES: "1"
+      
+      - name: 保存Cookie缓存
+        uses: actions/cache/save@v3
+        if: always()
+        with:
+          path: cookies
+          key: rainyun-cookies-${{ secrets.RAINYUN_USER }}
       
       - name: 清理临时文件
         run: rm -rf temp
