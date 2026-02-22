@@ -432,7 +432,7 @@ def compute_similarity(img1_path, img2_path):
         return 0.0, 0
 
 
-def sign_in_account(user, pwd, debug=False, headless=False, retry_count=0, max_retries=1):
+def sign_in_account(user, pwd, debug=False, headless=False):
     timeout = 15
     driver = None
     
@@ -440,8 +440,6 @@ def sign_in_account(user, pwd, debug=False, headless=False, retry_count=0, max_r
     
     try:
         logger.info(f"开始处理账户: {user}")
-        if not debug:
-            time.sleep(random.randint(5, 10))
         
         if ICR is not None:
             logger.info("使用ICR模块进行验证码识别（旋转分析+模板匹配）")
@@ -650,18 +648,10 @@ def sign_in_account(user, pwd, debug=False, headless=False, retry_count=0, max_r
             logger.info("任务执行成功！")
             return True, user, current_points, None
         else:
-            if retry_count < max_retries:
-                logger.warning(f"登录失败，准备重试 ({retry_count + 1}/{max_retries})")
-                time.sleep(random.randint(3, 5))
-                return sign_in_account(user, pwd, debug, headless, retry_count + 1, max_retries)
             return False, user, 0, "登录失败"
 
     except Exception as e:
         logger.error(f"异常: {str(e)}", exc_info=True)
-        if retry_count < max_retries:
-            logger.warning(f"发生异常，准备重试 ({retry_count + 1}/{max_retries})")
-            time.sleep(random.randint(3, 5))
-            return sign_in_account(user, pwd, debug, headless, retry_count + 1, max_retries)
         return False, user, 0, str(e)
     finally:
         if driver:
@@ -710,25 +700,41 @@ if __name__ == "__main__":
         index, user, pwd = account_info
         thread_name = threading.current_thread().name
         logger.info(f"[{thread_name}] === 开始处理第 {index} 个账户: {user} ===")
-        result = sign_in_account(user, pwd, debug=debug, headless=headless, max_retries=max_retries)
+        result = sign_in_account(user, pwd, debug=debug, headless=headless)
         logger.info(f"[{thread_name}] === 第 {index} 个账户处理完成 ===")
         return (index, result)
     
-    logger.info(f"开始并发处理 {len(accounts)} 个账户...")
+    current_retry = 0
+    failed_accounts = [(i + 1, user, pwd) for i, (user, pwd) in enumerate(accounts)]
     
-    account_infos = [(i + 1, user, pwd) for i, (user, pwd) in enumerate(accounts)]
-    
-    with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="Worker") as executor:
-        future_to_account = {executor.submit(process_account, info): info for info in account_infos}
+    while current_retry <= max_retries and failed_accounts:
+        if current_retry > 0:
+            logger.info(f"\n{'='*60}")
+            logger.info(f"第 {current_retry} 轮重试，共 {len(failed_accounts)} 个失败账户")
+            logger.info(f"{'='*60}\n")
+            time.sleep(random.randint(5, 15))
+        else:
+            logger.info(f"开始并发处理 {len(failed_accounts)} 个账户...")
         
-        for future in as_completed(future_to_account):
-            account_info = future_to_account[future]
-            try:
-                index, result = future.result()
-                results.append((index, result))
-            except Exception as e:
-                logger.error(f"账户 {account_info[1]} 处理异常: {e}")
-                results.append((account_info[0], (False, account_info[1], 0, str(e))))
+        account_infos = failed_accounts.copy()
+        failed_accounts = []
+        
+        with ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix="Worker") as executor:
+            future_to_account = {executor.submit(process_account, info): info for info in account_infos}
+            
+            for future in as_completed(future_to_account):
+                account_info = future_to_account[future]
+                try:
+                    index, result = future.result()
+                    results.append((index, result))
+                    if not result[0]:
+                        failed_accounts.append(account_info)
+                except Exception as e:
+                    logger.error(f"账户 {account_info[1]} 处理异常: {e}")
+                    results.append((account_info[0], (False, account_info[1], 0, str(e))))
+                    failed_accounts.append(account_info)
+        
+        current_retry += 1
     
     results.sort(key=lambda x: x[0])
     results = [result for _, result in results]
