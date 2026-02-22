@@ -32,32 +32,10 @@ jobs:
       # 移除Chrome浏览器缓存，因为缓存系统目录可能导致权限问题
       # 使用webdriver-manager自动管理ChromeDriver，无需缓存
       
-      - name: 清理webdriver-manager缓存
-        run: rm -rf /home/runner/.wdm || true
-      
       - name: 安装Chrome和ChromeDriver
         run: |
           sudo apt-get update
           sudo apt-get install -y google-chrome-stable curl unzip
-          # 安装Chrome在无头模式下运行所需的依赖库
-          sudo apt-get install -y \
-            libx11-6 \
-            libxcomposite1 \
-            libxcursor1 \
-            libxdamage1 \
-            libxext6 \
-            libxi6 \
-            libxtst6 \
-            libnss3 \
-            libcups2 \
-            libxss1 \
-            libxrandr2 \
-            libasound2t64 \
-            libpangocairo-1.0-0 \
-            libatk1.0-0 \
-            libatk-bridge2.0-0 \
-            libgtk-3-0 \
-            libgdk-pixbuf2.0-0
           # 使用webdriver-manager自动管理ChromeDriver版本
           pip install webdriver-manager chromedriver-binary-auto
       
@@ -66,7 +44,7 @@ jobs:
       
       - name: 执行签到脚本
        # 开启debug查看完整过程
-        run: python rainyun.py
+        run: DEBUG=true HEADLESS=false python rainyun.py python rainyun.py
         env:
           # 请在GitHub仓库的Settings > Secrets and variables > Actions中设置这些密钥
           RAINYUN_USER: ${{ secrets.RAINYUN_USER }}
@@ -101,10 +79,11 @@ jobs:
           
           # 设置无头模式环境变量
           HEADLESS: "true"
-          GITHUB_ACTIONS: "true"
           # 启用调试日志
           DEBUG: "false"
-          
+          # 确保使用系统路径中的ChromeDriver
+          CHROMEDRIVER_PATH: "chromedriver"
+      
       - name: 清理临时文件
         run: rm -rf temp
         if: always()  # 即使前面步骤失败也执行清理
