@@ -9,11 +9,32 @@ import json
 import hashlib
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
+import warnings
+
+warnings.filterwarnings('ignore')
 
 import cv2
 import ddddocr
 import requests
 import ICR
+
+_http_session = None
+_http_session_lock = threading.Lock()
+
+def get_http_session():
+    global _http_session
+    if _http_session is None:
+        with _http_session_lock:
+            if _http_session is None:
+                _http_session = requests.Session()
+                adapter = requests.adapters.HTTPAdapter(
+                    pool_connections=10,
+                    pool_maxsize=20,
+                    max_retries=3
+                )
+                _http_session.mount('http://', adapter)
+                _http_session.mount('https://', adapter)
+    return _http_session
 
 from selenium import webdriver
 from selenium.common import TimeoutException
@@ -265,7 +286,8 @@ def check_cookie_valid(driver):
 def download_image(url, filename):
     os.makedirs("temp", exist_ok=True)
     try:
-        response = requests.get(url, timeout=10, proxies={"http": None, "https": None}, verify=False)
+        session = get_http_session()
+        response = session.get(url, timeout=10, proxies={"http": None, "https": None}, verify=False)
         if response.status_code == 200:
             with open(os.path.join("temp", filename), "wb") as f:
                 f.write(response.content)
