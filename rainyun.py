@@ -5,6 +5,8 @@ import re
 import time
 import subprocess
 import sys
+import json
+import threading
 
 import cv2
 import ddddocr
@@ -51,15 +53,67 @@ except ImportError:
         pass
 
 
+def get_cookie_file(username):
+    return os.path.join("cache", f"cookies_{username}.json")
+
+
+def save_cookies(driver, username):
+    cookies = driver.get_cookies()
+    for cookie in cookies:
+        cookie.pop('sameSite', None)
+        cookie.pop('storeId', None)
+    os.makedirs("cache", exist_ok=True)
+    cookie_file = get_cookie_file(username)
+    with open(cookie_file, "w", encoding="utf-8") as f:
+        json.dump(cookies, f, ensure_ascii=False, indent=2)
+    logger.info(f"Cookie已保存: {cookie_file}")
+
+
+def load_cookies(driver, username):
+    cookie_file = get_cookie_file(username)
+    if not os.path.exists(cookie_file):
+        return False
+    try:
+        with open(cookie_file, "r", encoding="utf-8") as f:
+            cookies = json.load(f)
+        driver.get("https://app.rainyun.com")
+        time.sleep(2)
+        for cookie in cookies:
+            try:
+                driver.add_cookie(cookie)
+            except Exception as e:
+                logger.warning(f"添加Cookie失败: {e}")
+        driver.refresh()
+        time.sleep(3)
+        if "dashboard" in driver.current_url or "auth" not in driver.current_url:
+            logger.info(f"Cookie加载成功，已登录")
+            return True
+    except Exception as e:
+        logger.warning(f"加载Cookie失败: {e}")
+    return False
+
+
 def init_selenium(debug=False, headless=False):
     ops = webdriver.ChromeOptions()
     if headless or os.environ.get("GITHUB_ACTIONS", "false") == "true":
         for option in ['--headless', '--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']:
             ops.add_argument(option)
-    ops.add_argument('--window-size=1920,1080')
+    
+    width = random.randint(1280, 1920)
+    height = random.randint(720, 1080)
+    ops.add_argument(f'--window-size={width},{height}')
     ops.add_argument('--disable-blink-features=AutomationControlled')
     ops.add_argument('--no-proxy-server')
     ops.add_argument('--lang=zh-CN')
+    
+    user_agents = [
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+        'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15',
+    ]
+    ops.add_argument(f'--user-agent={random.choice(user_agents)}')
     
     is_github_actions = os.environ.get("GITHUB_ACTIONS", "false") == "true"
     if debug and not is_github_actions:
@@ -303,40 +357,67 @@ def sign_in_account(user, pwd, debug=False, headless=False):
             driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {"source": js})
         except: pass
         
-        logger.info("发起登录请求")
-        driver.get("https://app.rainyun.com/auth/login")
-        wait = WebDriverWait(driver, timeout)
+        use_cookie = os.environ.get("USE_COOKIE", "true").lower() == "true"
         
-        # 登录流程
-        username = wait.until(EC.visibility_of_element_located((By.NAME, 'login-field')))
-        password = wait.until(EC.visibility_of_element_located((By.NAME, 'login-password')))
-        try:
-            login_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="app"]/div[1]/div[1]/div/div[2]/fade/div/div/span/form/button')))
-        except:
-            login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]')))
+        if use_cookie:
+            logger.info("尝试使用Cookie免密登录")
+            driver.get("https://app.rainyun.com")
+            if load_cookies(driver, user):
+                if "dashboard" in driver.current_url:
+                    logger.info("Cookie登录成功！")
+                else:
+                    driver.get("https://app.rainyun.com")
+                    time.sleep(3)
+                    if "auth" in driver.current_url:
+                        logger.info("Cookie已过期，需要重新登录")
+                        use_cookie = False
+            else:
+                logger.info("Cookie不可用或已过期，需要重新登录")
+                use_cookie = False
+                driver.get("https://app.rainyun.com/auth/login")
+        else:
+            driver.get("https://app.rainyun.com/auth/login")
+        
+        if not use_cookie:
+            wait = WebDriverWait(driver, timeout)
             
-        username.clear()
-        password.clear()
-        username.send_keys(user)
-        time.sleep(0.5)
-        password.send_keys(pwd)
-        time.sleep(0.5)
-        driver.execute_script("arguments[0].click();", login_button)
+            username = wait.until(EC.visibility_of_element_located((By.NAME, 'login-field')))
+            password = wait.until(EC.visibility_of_element_located((By.NAME, 'login-password')))
+            try:
+                login_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//*[@id="app"]/div[1]/div[1]/div/div[2]/fade/div/div/span/form/button')))
+            except:
+                login_button = wait.until(EC.element_to_be_clickable((By.CSS_SELECTOR, 'button[type="submit"]')))
+                
+            username.clear()
+            password.clear()
+            username.send_keys(user)
+            time.sleep(0.5)
+            password.send_keys(pwd)
+            time.sleep(0.5)
+            driver.execute_script("arguments[0].click();", login_button)
+            
+            try:
+                wait.until(EC.visibility_of_element_located((By.ID, 'tcaptcha_iframe_dy')))
+                logger.warning("触发验证码！")
+                driver.switch_to.frame("tcaptcha_iframe_dy")
+                process_captcha()
+            except TimeoutException:
+                logger.info("未触发验证码")
+            
+            time.sleep(5)
+            driver.switch_to.default_content()
         
-        # 登录验证码
-        try:
-            wait.until(EC.visibility_of_element_located((By.ID, 'tcaptcha_iframe_dy')))
-            logger.warning("触发验证码！")
-            driver.switch_to.frame("tcaptcha_iframe_dy")
-            process_captcha()
-        except TimeoutException:
-            logger.info("未触发验证码")
-        
-        time.sleep(5)
-        driver.switch_to.default_content()
+        wait = WebDriverWait(driver, timeout)
         
         if "dashboard" in driver.current_url:
             logger.info("登录成功！")
+            
+            wait = WebDriverWait(driver, timeout)
+            
+            if use_cookie:
+                logger.info("更新Cookie缓存")
+                save_cookies(driver, user)
+            
             logger.info("正在转到赚取积分页")
             
             # --- 修复5：给点击操作增加稳定性 ---
@@ -463,12 +544,52 @@ if __name__ == "__main__":
         logger.error("未找到有效账户配置或数量不匹配")
         exit(1)
     
-    results = []
-    for i, (user, pwd) in enumerate(accounts, 1):
-        logger.info(f"\n=== 开始处理第 {i} 个账户: {user} ===")
+    max_retries = 1
+    max_workers = int(os.environ.get("MAX_WORKERS", "2"))
+    max_workers = min(max_workers, len(accounts))
+    logger.info(f"启用并发处理，最大并发数: {max_workers}")
+    
+    results_lock = threading.Lock()
+    results = [None] * len(accounts)
+    completed_count = [0]
+    completed_lock = threading.Lock()
+    
+    def process_account(index, user, pwd):
+        logger.info(f"[线程 {index + 1}] 开始处理账户: {user}")
         result = sign_in_account(user, pwd, debug=debug, headless=headless)
-        results.append(result)
-        logger.info(f"=== 第 {i} 个账户处理完成 ===\n")
+        with results_lock:
+            results[index] = (index + 1, user, pwd, result)
+        with completed_lock:
+            completed_count[0] += 1
+            logger.info(f"[线程 {completed_count[0]}/{len(accounts)}] 账户 {user} 处理完成")
+    
+    threads = []
+    for i, (user, pwd) in enumerate(accounts):
+        t = threading.Thread(target=process_account, args=(i, user, pwd))
+        threads.append(t)
+        t.start()
+        if len(threads) >= max_workers or i == len(accounts) - 1:
+            for t in threads:
+                t.join()
+            threads = []
+    
+    failed_accounts = [(i, user, pwd) for i, user, pwd, (success, _, _, _) in results if not success]
+    
+    if failed_accounts and max_retries > 0:
+        wait_time = random.randint(15, 30)
+        logger.warning(f"存在 {len(failed_accounts)} 个账户失败，{wait_time}秒后开始重试...")
+        time.sleep(wait_time)
+        
+        for idx, user, pwd in failed_accounts:
+            logger.info(f"开始重试账户: {user}")
+            result = sign_in_account(user, pwd, debug=debug, headless=headless)
+            for i, (i_idx, i_user, _, _) in enumerate(results):
+                if i_user == user:
+                    results[i] = (i_idx, user, pwd, result)
+                    break
+            logger.info(f"账户 {user} 重试完成")
+    
+    results = [r[3] for r in results if r is not None]
     
     # 生成统一通知
     success_count = sum(1 for r in results if r[0])

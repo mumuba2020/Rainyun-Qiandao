@@ -16,15 +16,19 @@ Rainyun-Qiandao-V2 是一个基于 Selenium 和 ICR（Image Captcha Recognition�
 
 ## 功能特性
 
-![Features](https://img.shields.io/badge/features-11+-orange.svg?style=flat-square)
+![Features](https://img.shields.io/badge/features-15+-orange.svg?style=flat-square)
 
 - ✅ 自动完成雨云账户登录
 - ✅ 使用 ICR 模块进行验证码自动识别（旋转分析+模板匹配）
+- ✅ 支持Cookie缓存免密登录，跳过验证码
+- ✅ 随机浏览器指纹（窗口尺寸+User-Agent），降低被检测风险
 - ✅ 支持自定义随机延时（5-20秒），避免被系统识别为自动化脚本
 - ✅ 支持在本地环境和 GitHub Actions 中运行
 - ✅ 集成 webdriver-manager 自动匹配 ChromeDriver
 - ✅ 详细的日志记录，便于排查问题
 - ✅ 支持多账户签到，每个账户独立运行，互不干扰
+- ✅ 支持并发处理多账户（可配置并发数）
+- ✅ 失败自动重试机制，账户处理完成后统一重试
 - ✅ 支持统一通知，汇总所有账户签到结果
 - ✅ 支持7种通知推送方式（Push+、SMTP、Bark、钉钉、飞书、Telegram、Server酱）
 - ✅ 支持自动更新功能，检测到新版本或版本过低时自动同步
@@ -182,6 +186,8 @@ AUTO_UPDATE=true
 | HEADLESS | 是否以无头模式运行（true/false） | false | ❌ |
 | DEBUG | 是否启用调试模式（true/false） | false | ❌ |
 | AUTO_UPDATE | 是否启用自动更新（true/false） | true | ❌ |
+| USE_COOKIE | 是否启用Cookie缓存免密登录（true/false） | true | ❌ |
+| MAX_WORKERS | 最大并发线程数 | 账户数量 | ❌ |
 | GITHUB_ACTIONS | 在 GitHub Actions 环境中自动设置为 true，用于强制无头模式 | false | ❌ |
 
 ### 关键设置

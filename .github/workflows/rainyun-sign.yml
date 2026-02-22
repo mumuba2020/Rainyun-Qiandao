@@ -24,6 +24,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-python-
       
+      - name: 缓存Cookie
+        uses: actions/cache@v3
+        with:
+          path: cache
+          key: rainyun-cookies-${{ secrets.RAINYUN_USER }}
+          restore-keys: |
+            rainyun-cookies-
+
       - name: 安装依赖
         run: |
           python -m pip install --upgrade pip
@@ -44,11 +52,12 @@ jobs:
       
       - name: 执行签到脚本
        # 开启debug查看完整过程
-        run: DEBUG=true HEADLESS=false python rainyun.py python rainyun.py
+        run: DEBUG=true HEADLESS=true python rainyun.py
         env:
           # 请在GitHub仓库的Settings > Secrets and variables > Actions中设置这些密钥
           RAINYUN_USER: ${{ secrets.RAINYUN_USER }}
           RAINYUN_PASS: ${{ secrets.RAINYUN_PASS }}
+          USE_COOKIE: "true"
           # 1. Push+ 微信推送（已配置，保留）
           PUSH_PLUS_TOKEN: ${{ secrets.PUSH_PLUS_TOKEN }}
           PUSH_PLUS_USER: ${{ secrets.PUSH_PLUS_USER }}  # 可选：群组编码
