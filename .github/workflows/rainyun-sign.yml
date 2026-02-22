@@ -35,27 +35,44 @@ jobs:
       - name: 安装Chrome和ChromeDriver
         run: |
           sudo apt-get update
-          sudo apt-get install -y google-chrome-stable curl unzip
+          sudo apt-get install -y google-chrome-stable curl unzip jq
           
-          CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+')
-          echo "Chrome版本: $CHROME_VERSION"
+          CHROME_FULL_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+')
+          CHROME_MILESTONE=$(echo "$CHROME_FULL_VERSION" | cut -d'.' -f1)
+          echo "Chrome完整版本: $CHROME_FULL_VERSION"
+          echo "Chrome里程碑版本: $CHROME_MILESTONE"
           
-          CHROMEDRIVER_VERSION=$(curl -sS https://googlechromelabs.github.io/chrome-for-testing/latest-versions-per-milestone.json | grep -oP "\"$CHROME_VERSION\".*?version\":\"\K[^\"]+" | head -1)
+          CHROMEDRIVER_VERSION=""
           
-          if [ -z "$CHROMEDRIVER_VERSION" ]; then
-            CHROMEDRIVER_VERSION=$(curl -sS "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_VERSION" 2>/dev/null || echo "")
+          JSON_DATA=$(curl -sS "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json")
+          if [ -n "$JSON_DATA" ]; then
+            CHROMEDRIVER_VERSION=$(echo "$JSON_DATA" | jq -r --arg ver "$CHROME_FULL_VERSION" '.versions[] | select(.version == $ver) | .downloads.chromedriver[] | select(.platform == "linux64") | .url' | head -1)
+            if [ -n "$CHROMEDRIVER_VERSION" ]; then
+              echo "找到匹配的ChromeDriver下载链接"
+              curl -sS -o /tmp/chromedriver.zip "$CHROMEDRIVER_VERSION"
+              unzip -o /tmp/chromedriver.zip -d /tmp/
+              sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver 2>/dev/null || sudo mv /tmp/chromedriver /usr/local/bin/chromedriver 2>/dev/null
+              sudo chmod +x /usr/local/bin/chromedriver
+              echo "ChromeDriver安装完成: $(chromedriver --version)"
+            fi
           fi
           
-          if [ -n "$CHROMEDRIVER_VERSION" ]; then
-            echo "下载ChromeDriver版本: $CHROMEDRIVER_VERSION"
-            curl -sS -o /tmp/chromedriver.zip "https://storage.googleapis.com/chrome-for-testing-public/${CHROMEDRIVER_VERSION}/linux64/chromedriver-linux64.zip" || \
-            curl -sS -o /tmp/chromedriver.zip "https://chromedriver.storage.googleapis.com/${CHROMEDRIVER_VERSION}/chromedriver_linux64.zip"
-            unzip -o /tmp/chromedriver.zip -d /tmp/
-            sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver 2>/dev/null || sudo mv /tmp/chromedriver /usr/local/bin/chromedriver
-            sudo chmod +x /usr/local/bin/chromedriver
-            echo "ChromeDriver安装完成: $(chromedriver --version)"
-          else
-            echo "无法获取ChromeDriver版本，将使用系统默认"
+          if [ -z "$CHROMEDRIVER_VERSION" ]; then
+            echo "尝试使用里程碑版本查找..."
+            LATEST_VERSION=$(curl -sS "https://googlechromelabs.github.io/chrome-for-testing/latest-versions-per-milestone.json" | jq -r ".milestones.\"$CHROME_MILESTONE\".version" 2>/dev/null)
+            if [ -n "$LATEST_VERSION" ] && [ "$LATEST_VERSION" != "null" ]; then
+              echo "里程碑 $CHROME_MILESTONE 最新版本: $LATEST_VERSION"
+              DRIVER_URL="https://storage.googleapis.com/chrome-for-testing-public/${LATEST_VERSION}/linux64/chromedriver-linux64.zip"
+              echo "下载URL: $DRIVER_URL"
+              curl -sS -o /tmp/chromedriver.zip "$DRIVER_URL"
+              unzip -o /tmp/chromedriver.zip -d /tmp/
+              sudo mv /tmp/chromedriver-linux64/chromedriver /usr/local/bin/chromedriver
+              sudo chmod +x /usr/local/bin/chromedriver
+              echo "ChromeDriver安装完成: $(chromedriver --version)"
+            else
+              echo "无法获取ChromeDriver版本，尝试使用系统默认"
+              which chromedriver && chromedriver --version || echo "系统无默认chromedriver"
+            fi
           fi
       
       - name: 确保temp目录存在
