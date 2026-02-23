@@ -719,14 +719,14 @@ def sign_in_account(user, pwd, debug=False, headless=False, index=0):
         time.sleep(0.5)
         logger.info("点击登录按钮...")
         
-        for click_retry in range(3):
+        for click_retry in range(2):
             try:
-                login_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//button[contains(text(), "登录") and not(contains(@class, "social")) and not(contains(@href, "oauth")) and not(contains(@class, "wechat")) and not(contains(@class, "qq"))]')))
+                login_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//button[contains(@class, "btn-primary") and (contains(., "登录") or contains(., "登 录"))]')))
                 driver.execute_script("arguments[0].click();", login_button)
                 break
             except Exception as e:
                 if click_retry < 2:
-                    logger.warning(f"登录按钮点击失败，重试 ({click_retry + 1}/3)")
+                    logger.warning(f"登录按钮点击失败，重试 ({click_retry + 1}/2)")
                     time.sleep(1)
                 else:
                     raise TimeoutException("登录按钮点击失败")
