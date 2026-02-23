@@ -565,10 +565,10 @@ def sign_in_account(user, pwd, debug=False, headless=False, index=0):
             try:
                 username = wait.until(EC.visibility_of_element_located((By.NAME, 'login-field')))
                 password = wait.until(EC.visibility_of_element_located((By.NAME, 'login-password')))
-                login_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//form//button[contains(text(), "登录") and not(contains(@class, "social")) and not(contains(@href, "oauth"))]')))
+                login_button = wait.until(EC.visibility_of_element_located((By.XPATH, '//*[@id="app"]/div[1]/div[1]/div/div[2]/fade/div/div/span/form/button')))
                 username.send_keys(user)
                 password.send_keys(pwd)
-                driver.execute_script("arguments[0].click();", login_button)
+                login_button.click()
             except TimeoutException:
                 logger.error("页面加载超时")
                 return False, user, 0, "登录超时"
@@ -576,14 +576,15 @@ def sign_in_account(user, pwd, debug=False, headless=False, index=0):
             time.sleep(5)
             
             try:
-                wait.until(EC.visibility_of_element_located((By.ID, 'tcaptcha_iframe_dy')))
+                login_captcha = wait.until(EC.visibility_of_element_located((By.ID, 'tcaptcha_iframe_dy')))
                 logger.warning("触发验证码！")
                 driver.switch_to.frame("tcaptcha_iframe_dy")
                 process_captcha()
                 driver.switch_to.default_content()
             except TimeoutException:
                 logger.info("未触发验证码")
-                driver.switch_to.default_content()
+            
+            dismiss_modal_confirm(driver, timeout)
             
             if "/dashboard" in driver.current_url or "/account" in driver.current_url:
                 logger.info("登录成功！")
