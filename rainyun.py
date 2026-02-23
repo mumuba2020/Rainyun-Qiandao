@@ -721,7 +721,7 @@ def sign_in_account(user, pwd, debug=False, headless=False, index=0):
         
         for click_retry in range(3):
             try:
-                login_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//form//button[contains(text(), "登录") and not(contains(@class, "social")) and not(contains(@href, "oauth"))]')))
+                login_button = wait.until(EC.element_to_be_clickable((By.XPATH, '//button[contains(text(), "登录") and not(contains(@class, "social")) and not(contains(@href, "oauth")) and not(contains(@class, "wechat")) and not(contains(@class, "qq"))]')))
                 driver.execute_script("arguments[0].click();", login_button)
                 break
             except Exception as e:
