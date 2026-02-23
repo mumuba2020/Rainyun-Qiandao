@@ -320,7 +320,7 @@ def load_cookies(driver, user):
         with open(cookie_file, 'r', encoding='utf-8') as f:
             cookies = json.load(f)
         
-        driver.get("https://app.rainyun.com/")
+        safe_get(driver, "https://app.rainyun.com/")
         time.sleep(1)
         
         for cookie in cookies:
@@ -572,7 +572,7 @@ def sign_in_account(user, pwd, debug=False, headless=False, index=0):
         logger.info("尝试使用Cookie缓存登录")
         load_cookies(driver, user)
         logger.info("正在跳转积分页...")
-        driver.get("https://app.rainyun.com/account/reward/earn")
+        safe_get(driver, "https://app.rainyun.com/account/reward/earn")
         time.sleep(3)
         
         wait = WebDriverWait(driver, timeout)
@@ -607,7 +607,7 @@ def sign_in_account(user, pwd, debug=False, headless=False, index=0):
             if "/dashboard" in driver.current_url or "/account" in driver.current_url:
                 logger.info("登录成功！")
                 save_cookies(driver, user)
-                driver.get("https://app.rainyun.com/account/reward/earn")
+                safe_get(driver, "https://app.rainyun.com/account/reward/earn")
                 time.sleep(2)
             else:
                 logger.error(f"登录失败，当前页面: {driver.current_url}")
@@ -616,7 +616,7 @@ def sign_in_account(user, pwd, debug=False, headless=False, index=0):
             logger.info("Cookie有效，免密登录成功！")
         
         if "/account/reward/earn" not in driver.current_url:
-            driver.get("https://app.rainyun.com/account/reward/earn")
+            safe_get(driver, "https://app.rainyun.com/account/reward/earn")
             time.sleep(2)
         
         dismiss_modal_confirm(driver, timeout)
